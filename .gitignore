@@ -1,0 +1,6 @@
+# IDE
+.idea
+
+# Rust and Cargo
+/target
+Cargo.lock
