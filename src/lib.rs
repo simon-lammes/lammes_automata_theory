@@ -1,5 +1,13 @@
 use std::collections::HashMap;
 
+/// Describes to which next state a DFA switches when it reads a certain input while being in
+/// a certain state.
+struct Transition {
+    state: String,
+    input: char,
+    next_state: String,
+}
+
 /// # [Deterministic finite acceptor](https://en.wikipedia.org/wiki/Deterministic_finite_automaton)
 /// The DFA is modelled slightly different than in its mathematical model.
 struct Dfa {
@@ -10,18 +18,20 @@ struct Dfa {
     /// Example: The state 'start' is mapped to a second map which maps the input character '1' to
     /// 'started', meaning that when the DFA reads a '1' while being in state 'start', it will
     /// switch to state 'started'.
-    transitions: HashMap<String, HashMap<char, String>>
+    transitions: Vec<Transition>,
 }
 
 impl Dfa {
-    pub fn test(&self, input: &str) -> bool {
+    /// Checks whether a certain input is accepted by the DFA.
+    pub fn check(&self, input: &str) -> bool {
         let mut current_state: String = self.start_state.clone();
+        // Go over each character and find suitable transitions for the state.
         for char in input.chars() {
-            let next_state_option = self.transitions.get(&current_state[..])
-                .and_then(|state| state.get(&char));
-            match next_state_option {
-                Some(next_state) => {
-                    current_state = next_state.to_string();
+            let next_transition_option = self.transitions.iter()
+                .find(|transition| transition.state.eq(&current_state) && transition.input.eq(&char));
+            match next_transition_option {
+                Some(next_transition) => {
+                    current_state = next_transition.next_state.to_string();
                 }
                 None => {
                     // The next state cannot be determined, which means that we are in an error state.
@@ -36,27 +46,36 @@ impl Dfa {
 
 #[cfg(test)]
 mod dfa_tests {
-    use crate::{Dfa};
     use std::collections::HashMap;
+
+    use crate::{Dfa, Transition};
 
     #[test]
     fn test_dfa() {
-        let mut transitions = HashMap::new();
-        let mut q0_transitions = HashMap::new();
-        q0_transitions.insert('1', "q1".to_string());
-        q0_transitions.insert('0', "q0".to_string());
-        let mut q1_transitions = HashMap::new();
-        q1_transitions.insert('1', "q1".to_string());
-        transitions.insert("q0".to_string(), q0_transitions);
-        transitions.insert("q1".to_string(), q1_transitions);
         let dfa = Dfa {
             name: String::from("Accept if all '1' characters are placed at the end and there is at least one '1' character."),
             start_state: "q0".to_string(),
             accept_states: vec!["q1".to_string()],
-            transitions,
+            transitions: vec![
+                Transition {
+                    state: "q0".to_string(),
+                    input: '0',
+                    next_state: "q0".to_string()
+                },
+                Transition {
+                    state: "q0".to_string(),
+                    input: '1',
+                    next_state: "q1".to_string()
+                },
+                Transition {
+                    state: "q1".to_string(),
+                    input: '1',
+                    next_state: "q1".to_string()
+                },
+            ],
         };
-        assert!(dfa.test("000111"), "Should accept if there are at least one '1' characters and they are all at the end");
-        assert!(!dfa.test("00010"), "Should not accept if input does not end with '1'.");
-        assert!(!dfa.test("0101"), "Should not accept if there are '1' characters which are not placed at the end.");
+        assert!(dfa.check("000111"), "Should accept if there are at least one '1' characters and they are all at the end");
+        assert!(!dfa.check("00010"), "Should not accept if input does not end with '1'.");
+        assert!(!dfa.check("0101"), "Should not accept if there are '1' characters which are not placed at the end.");
     }
 }
