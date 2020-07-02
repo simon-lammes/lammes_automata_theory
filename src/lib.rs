@@ -8,7 +8,7 @@ use std::cmp::Ordering;
 
 /// Describes to which next state a DFA switches when it reads a certain input while being in
 /// a certain state.
-#[derive(Ord, PartialOrd, Eq, PartialEq, Hash, Clone)]
+#[derive(Ord, PartialOrd, Eq, PartialEq, Hash, Clone, Debug)]
 struct Transition {
     state: String,
     input: char,
@@ -17,6 +17,7 @@ struct Transition {
 
 /// # [Deterministic finite acceptor](https://en.wikipedia.org/wiki/Deterministic_finite_automaton)
 /// The DFA is modelled slightly different than in its mathematical model.
+#[derive(Debug)]
 struct Dfa {
     name: String,
     start_state: String,
@@ -62,6 +63,11 @@ impl Dfa {
     }
 
     /// Minimizes the DFA with the algorithm found on [here.](https://www.geeksforgeeks.org/minimization-of-dfa/)
+    /// Usually, when the states "q0" and "q1" are equivalent, you would expect this algorithm to merge them into
+    /// a state called something like "q0,q1". This, however, could lead to name collisions as there might already exist
+    /// another state called "q0,q1". Therefore, the new name for the merged state would just be "qo". This method concentrates
+    /// on reliably minimizing the DFA. Finding suitable names (like "q0,q1") for the merged states,
+    /// while avoiding name collisions, might be the job for some other method.
     pub fn minimize(&mut self) {
         self.remove_inaccessible_states();
         let all_input_symbols = self.get_all_input_symbols();
@@ -113,10 +119,11 @@ impl Dfa {
         }
         // We build a hash map that maps the old names to the new names.
         // If q0 and q1 are indistinguishable and thus in the same equivalence class,
-        // q0 will be mapped to q0,q1 and q1 will also be mapped to q0,q1.
+        // q0 will be mapped to q0 and q1 will also be mapped to q0. Thus,
+        // the states q0 and q1 are merged into the "new" state q0.
         let mut renaming_operations = HashMap::new();
         for equivalence_class in equivalence_classes {
-            let new_name = itertools::join(equivalence_class.iter().sorted(), ",");
+            let new_name = equivalence_class.iter().sorted().next().unwrap().clone();
             for old_state_name in equivalence_class {
                 renaming_operations.insert(old_state_name, new_name.clone());
             }
