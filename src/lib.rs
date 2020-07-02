@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::iter::FromIterator;
 use std::ops::Deref;
 use std::borrow::Borrow;
@@ -8,7 +8,7 @@ use std::cmp::Ordering;
 
 /// Describes to which next state a DFA switches when it reads a certain input while being in
 /// a certain state.
-#[derive(Ord, PartialOrd, Eq, PartialEq, Hash)]
+#[derive(Ord, PartialOrd, Eq, PartialEq, Hash, Clone)]
 struct Transition {
     state: String,
     input: char,
@@ -62,8 +62,8 @@ impl Dfa {
     }
 
     /// Minimizes the DFA with the algorithm found on [here.](https://www.geeksforgeeks.org/minimization-of-dfa/)
-    /// Currently unreachable states are not removed -> TODO
     pub fn minimize(&mut self) {
+        self.remove_inaccessible_states();
         let all_input_symbols = self.get_all_input_symbols();
         let rejecting_states = HashSet::from_iter(self.get_all_states().difference(&self.accept_states).map(|x| x.clone()));
         // Initially, states are only split into accepting and rejecting states. Those are obviously distinguishable states that must
@@ -154,6 +154,38 @@ impl Dfa {
             }
         }
         true
+    }
+
+    /// Removes all states that cannot be reached by removing all transitions that have this state
+    /// either as start or end point. Uses the breath first algorithm to traverse the whole DFA and fit
+    /// all accessible states. All other states are inaccessible.
+    fn remove_inaccessible_states(&mut self) {
+        // Keep track of all states we visited. Those are accessible and can stay.
+        let mut visited_states: HashSet<&str> = HashSet::new();
+        // Keep track of the neighbors of our visited states so that we can visit them later.
+        // We'll use the "first come - first serve" approach which is typical for the breath first algorithm.
+        let mut states_to_visit: VecDeque<&str> = VecDeque::new();
+        // We'll start visiting the start state, of course.
+        states_to_visit.push_back(&self.start_state);
+        // Traverse the graph until there are no states to visit any more.
+        while states_to_visit.len() > 0 {
+            // First come - first serve. Just as the breath first algorithm is described.
+            let currently_visited_state = states_to_visit.pop_front().unwrap();
+            visited_states.insert(&currently_visited_state[..]);
+            // Find all neighbors of currently visited state (via transitions).
+            let transitions_for_currently_visited_state = self.transitions.iter().filter(|transition| transition.state[..] == *currently_visited_state);
+            // Loop over each neighbor (via transition) but only add it to our states_to_visit if it has not been visited before.
+            // Otherwise, we'll visit states over and over again and be in an infinite loop.
+            for transition in transitions_for_currently_visited_state {
+                if visited_states.contains(&transition.next_state[..]) {
+                    continue;
+                }
+                states_to_visit.push_back(&transition.next_state)
+            }
+        }
+        // Only keep transitions that have an accessible state and an accessible next_state. The other transitions cannot be accessed and thus should be removed.
+        self.transitions = Vec::from_iter(self.transitions.iter().filter(|transition|
+            visited_states.contains(&*transition.state) && visited_states.contains(&*transition.next_state)).cloned());
     }
 }
 
@@ -276,6 +308,11 @@ mod dfa_tests {
                     input: 'b',
                     next_state: "q8".to_string()
                 },
+                Transition {
+                    state: "inaccessible state".to_string(),
+                    input: 'a',
+                    next_state: "q8".to_string()
+                }
             ],
         }
     }
@@ -301,7 +338,7 @@ mod dfa_tests {
         // Instead we test for the number of states (which should be minimal) and we test that the DFA
         // still works like before.
         // Before minimizing:
-        assert_eq!(dfa.get_all_states().len(), 8);
+        assert_eq!(dfa.get_all_states().len(), 9);
         assert!(dfa.check("ababba"), "should accept input");
         // After minimizing:
         dfa.minimize();
