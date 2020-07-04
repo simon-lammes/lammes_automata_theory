@@ -1,15 +1,18 @@
+use std::borrow::Borrow;
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::fs::copy;
 use std::iter::FromIterator;
 use std::ops::Deref;
-use std::borrow::Borrow;
+
 use itertools::Itertools;
-use std::fs::copy;
-use std::cmp::Ordering;
+use serde::{Deserialize, Serialize};
+use std::collections::hash_map::RandomState;
 
 /// Describes to which next state a DFA switches when it reads a certain input while being in
 /// a certain state.
-#[derive(Ord, PartialOrd, Eq, PartialEq, Hash, Clone, Debug)]
-struct Transition {
+#[derive(Ord, PartialOrd, Eq, PartialEq, Hash, Clone, Debug, Serialize, Deserialize)]
+pub struct Transition {
     state: String,
     input: char,
     next_state: String,
@@ -17,8 +20,8 @@ struct Transition {
 
 /// # [Deterministic finite acceptor](https://en.wikipedia.org/wiki/Deterministic_finite_automaton)
 /// The DFA is modelled slightly different than in its mathematical model.
-#[derive(Debug)]
-struct Dfa {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Dfa {
     name: String,
     start_state: String,
     accept_states: HashSet<String>,
@@ -27,23 +30,29 @@ struct Dfa {
 
 impl Dfa {
     /// Checks whether a certain input is accepted by the DFA.
-    pub fn check(&self, input: &str) -> bool {
-        let mut current_state: String = self.start_state.clone();
-        // Go over each character and find suitable transitions for the state.
+    /// Additionally returns a list of the states that have been traversed while processing the input.
+    /// The start_state is included in that list of traversed states.
+    pub fn check(&self, input: &str) -> (bool, Vec<String>) {
+        let mut traversed_states: Vec<String> = Vec::new();
+        // The first traversed state is obviously the start state.
+        traversed_states.push(self.start_state.clone());
+        // Go over each character and find suitable transitions for the current state.
         for char in input.chars() {
+            let current_state = traversed_states.last().unwrap();
             let next_transition_option = self.get_transition(&current_state, &char);
             match next_transition_option {
                 Some(next_transition) => {
                     // Transition to the next state.
-                    current_state = next_transition.next_state.to_string();
+                    traversed_states.push(next_transition.next_state.to_string());
                 }
                 None => {
                     // The next state cannot be determined, which means that we are in an error state.
-                    return false;
+                    return (false, traversed_states);
                 }
             }
         }
-        self.accept_states.contains(&current_state)
+        // Accepts if the last state we visited (the current state) is an accepting state.
+        (self.accept_states.contains(&traversed_states.last().unwrap().clone()), traversed_states)
     }
 
     /// Tries to find a transition that fits for the current situation. Calling this function is like
@@ -68,7 +77,9 @@ impl Dfa {
     /// another state called "q0,q1". Therefore, the new name for the merged state would just be "qo". This method concentrates
     /// on reliably minimizing the DFA. Finding suitable names (like "q0,q1") for the merged states,
     /// while avoiding name collisions, might be the job for some other method.
-    pub fn minimize(&mut self) {
+    /// Returns a hash map with all renaming operations. For example, if q0 and q1 are merged into a new
+    /// state called q0, the returned object will map the old names qo and q1 to the new name q0.
+    pub fn minimize(&mut self) -> HashMap<String, String> {
         self.remove_inaccessible_states();
         let all_input_symbols = self.get_all_input_symbols();
         let rejecting_states = HashSet::from_iter(self.get_all_states().difference(&self.accept_states).map(|x| x.clone()));
@@ -123,6 +134,11 @@ impl Dfa {
         // the states q0 and q1 are merged into the "new" state q0.
         let mut renaming_operations = HashMap::new();
         for equivalence_class in equivalence_classes {
+            // If the equivalence class consists only of one state, there is no merge necessary and thus
+            // renaming operation for that equivalence class.
+            if equivalence_class.len() <= 1 {
+                continue;
+            }
             let new_name = equivalence_class.iter().sorted().next().unwrap().clone();
             for old_state_name in equivalence_class {
                 renaming_operations.insert(old_state_name, new_name.clone());
@@ -132,11 +148,12 @@ impl Dfa {
         // Then remove duplicates.
         self.transitions = Vec::from_iter(self.transitions.iter().map(|transition| {
             Transition {
-                state: renaming_operations.get(transition.state.as_str()).unwrap().clone(),
+                state: renaming_operations.get(transition.state.as_str()).unwrap_or(&transition.state).clone(),
                 input: transition.input,
-                next_state: renaming_operations.get(transition.next_state.as_str()).unwrap().clone()
+                next_state: renaming_operations.get(transition.next_state.as_str()).unwrap_or(&transition.next_state).clone(),
             }
         }).sorted().dedup());
+        renaming_operations
     }
 
     /// Two states are considered indistinguishable if they transition to states of the same equivalence class __for every input__.
@@ -144,7 +161,7 @@ impl Dfa {
     /// equivalence class.
     fn are_states_indistinguishable(&self, state_1: &str, state_2: &str, all_input_symbols: &HashSet<char>, equivalence_classes: &Vec<HashSet<String>>) -> bool {
         if state_1 == state_2 {
-            return true
+            return true;
         }
         for input in all_input_symbols {
             // Determine for state 1 and 2 to which equivalence class the DFA would transition for a given input.
@@ -200,8 +217,9 @@ impl Dfa {
 #[cfg(test)]
 mod dfa_tests {
     use std::collections::{HashMap, HashSet};
-    use crate::{Dfa, Transition};
     use std::iter::FromIterator;
+
+    use crate::{Dfa, Transition};
 
     /// Creates DFA that accepts input if all '1' characters are placed at the end and there is at least one '1' character.
     fn create_example_dfa() -> Dfa {
@@ -213,17 +231,17 @@ mod dfa_tests {
                 Transition {
                     state: "q0".to_string(),
                     input: '0',
-                    next_state: "q0".to_string()
+                    next_state: "q0".to_string(),
                 },
                 Transition {
                     state: "q0".to_string(),
                     input: '1',
-                    next_state: "q1".to_string()
+                    next_state: "q1".to_string(),
                 },
                 Transition {
                     state: "q1".to_string(),
                     input: '1',
-                    next_state: "q1".to_string()
+                    next_state: "q1".to_string(),
                 },
             ],
         }
@@ -238,87 +256,87 @@ mod dfa_tests {
                 Transition {
                     state: "q1".to_string(),
                     input: 'a',
-                    next_state: "q2".to_string()
+                    next_state: "q2".to_string(),
                 },
                 Transition {
                     state: "q1".to_string(),
                     input: 'b',
-                    next_state: "q3".to_string()
+                    next_state: "q3".to_string(),
                 },
                 Transition {
                     state: "q2".to_string(),
                     input: 'a',
-                    next_state: "q6".to_string()
+                    next_state: "q6".to_string(),
                 },
                 Transition {
                     state: "q2".to_string(),
                     input: 'b',
-                    next_state: "q4".to_string()
+                    next_state: "q4".to_string(),
                 },
                 Transition {
                     state: "q3".to_string(),
                     input: 'a',
-                    next_state: "q5".to_string()
+                    next_state: "q5".to_string(),
                 },
                 Transition {
                     state: "q3".to_string(),
                     input: 'b',
-                    next_state: "q6".to_string()
+                    next_state: "q6".to_string(),
                 },
                 Transition {
                     state: "q4".to_string(),
                     input: 'a',
-                    next_state: "q2".to_string()
+                    next_state: "q2".to_string(),
                 },
                 Transition {
                     state: "q4".to_string(),
                     input: 'b',
-                    next_state: "q6".to_string()
+                    next_state: "q6".to_string(),
                 },
                 Transition {
                     state: "q5".to_string(),
                     input: 'a',
-                    next_state: "q6".to_string()
+                    next_state: "q6".to_string(),
                 },
                 Transition {
                     state: "q5".to_string(),
                     input: 'b',
-                    next_state: "q3".to_string()
+                    next_state: "q3".to_string(),
                 },
                 Transition {
                     state: "q6".to_string(),
                     input: 'a',
-                    next_state: "q8".to_string()
+                    next_state: "q8".to_string(),
                 },
                 Transition {
                     state: "q6".to_string(),
                     input: 'b',
-                    next_state: "q7".to_string()
+                    next_state: "q7".to_string(),
                 },
                 Transition {
                     state: "q7".to_string(),
                     input: 'a',
-                    next_state: "q8".to_string()
+                    next_state: "q8".to_string(),
                 },
                 Transition {
                     state: "q7".to_string(),
                     input: 'b',
-                    next_state: "q7".to_string()
+                    next_state: "q7".to_string(),
                 },
                 Transition {
                     state: "q8".to_string(),
                     input: 'a',
-                    next_state: "q8".to_string()
+                    next_state: "q8".to_string(),
                 },
                 Transition {
                     state: "q8".to_string(),
                     input: 'b',
-                    next_state: "q8".to_string()
+                    next_state: "q8".to_string(),
                 },
                 Transition {
                     state: "inaccessible state".to_string(),
                     input: 'a',
-                    next_state: "q8".to_string()
+                    next_state: "q8".to_string(),
                 }
             ],
         }
@@ -327,9 +345,10 @@ mod dfa_tests {
     #[test]
     fn test_check() {
         let dfa = create_example_dfa();
-        assert!(dfa.check("000111"), "Should accept if there are at least one '1' characters and they are all at the end");
-        assert!(!dfa.check("00010"), "Should not accept if input does not end with '1'.");
-        assert!(!dfa.check("0101"), "Should not accept if there are '1' characters which are not placed at the end.");
+        assert!(dfa.check("000111").0, "Should accept if there are at least one '1' characters and they are all at the end");
+        assert_eq!(dfa.check("000111").1, vec!["q0", "q0", "q0", "q0", "q1", "q1", "q1"], "Should have traversed those states.");
+        assert!(!dfa.check("00010").0, "Should not accept if input does not end with '1'.");
+        assert!(!dfa.check("0101").0, "Should not accept if there are '1' characters which are not placed at the end.");
     }
 
     #[test]
@@ -346,10 +365,10 @@ mod dfa_tests {
         // still works like before.
         // Before minimizing:
         assert_eq!(dfa.get_all_states().len(), 9);
-        assert!(dfa.check("ababba"), "should accept input");
+        assert!(dfa.check("ababba").0, "should accept input");
         // After minimizing:
         dfa.minimize();
         assert_eq!(dfa.get_all_states().len(), 5);
-        assert!(dfa.check("ababba"), "should accept input");
+        assert!(dfa.check("ababba").0, "should accept input");
     }
 }
